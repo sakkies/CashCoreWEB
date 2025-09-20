@@ -1,0 +1,12 @@
+# Supabase Configuration
+SUPABASE_URL=https://whcwkuufssjoiktkpeen.supabase.co
+SUPABASE_SERVICE_KEY=your_service_key_here
+
+# YouTube API Configuration
+YOUTUBE_API_KEY=AIzaSyCGCarM_ZaZXsWoIU0QLcpljZehLFoV_Es
+
+# Rate limiting settings
+VERIFICATION_DELAY_SECONDS=1
+MAX_CONCURRENT_REQUESTS=5
+BATCH_SIZE=10
+VERIFICATION_INTERVAL_MINUTES=60

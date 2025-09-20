@@ -1,0 +1,16 @@
+Discord Bot Invite Link:
+
+https://discord.com/api/oauth2/authorize?client_id=1400465506711896235&permissions=2147483648&scope=bot%20applications.commands
+
+This link will:
+- Add the bot to your server
+- Grant necessary permissions for slash commands
+- Allow the bot to send messages and embeds
+
+Steps:
+1. Click the link above
+2. Select your Discord server
+3. Grant all permissions
+4. Wait 1-2 minutes for commands to appear
+5. Type "/" in Discord to see the commands
+

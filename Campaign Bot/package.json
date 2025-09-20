@@ -1,0 +1,21 @@
+{
+  "name": "cashcore-discord-bot",
+  "version": "1.0.0",
+  "description": "Discord bot for CashCore campaign management system",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "deploy": "node deploy-to-render.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "@supabase/supabase-js": "^2.50.3",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2"
+  },
+  "keywords": ["discord", "bot", "campaign", "cashcore"],
+  "author": "CashCore Team",
+  "license": "MIT"
+}
