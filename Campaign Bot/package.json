@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node --watch index.js",
-    "deploy": "node deploy-to-render.js"
+    "deploy": "node deploy-to-render.js",
+    "check-env": "node check-env.js"
   },
   "dependencies": {
     "discord.js": "^14.14.1",

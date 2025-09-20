@@ -52,3 +52,4 @@ INSERT INTO campaign_servers (campaign_name, discord_guild_id, discord_guild_nam
 ON CONFLICT (discord_guild_id) DO NOTHING;
 
 
+
