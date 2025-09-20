@@ -23,7 +23,7 @@ const supabase = createClient(config.supabase.url, supabaseKey);
 const processedInteractions = new Set();
 
 // Bot ready event
-client.once('clientReady', () => {
+client.once('ready', () => {
   console.log(`🤖 CashCore Discord Bot is online!`);
   console.log(`📊 Logged in as: ${client.user.tag}`);
   console.log(`🏠 Connected to ${client.guilds.cache.size} server(s)`);
@@ -2077,4 +2077,7 @@ app.listen(PORT, () => {
 });
 
 // Login to Discord
-client.login(config.discord.token);
+client.login(config.discord.token).catch(error => {
+  console.error('❌ Failed to login to Discord:', error);
+  process.exit(1);
+});
