@@ -1,0 +1,14 @@
+Example /create-embed command:
+
+/create-embed title:"Welcome to CashCore" description:"Please click the button below to begin the registration process.
+
+If you've used our services before, you'll be able to access all of your accounts across every CashCore server once you register.
+
+If this is your first time, you'll be guided through a quick account setup process." color:"#a259ff" footer:"CashCore 2025" button-label:"Register" button-url:"https://your-registration-link.com"
+
+Alternative without button URL (creates a custom button):
+/create-embed title:"Welcome to CashCore" description:"Please click the button below to begin the registration process.
+
+If you've used our services before, you'll be able to access all of your accounts across every CashCore server once you register.
+
+If this is your first time, you'll be guided through a quick account setup process." color:"#a259ff" footer:"CashCore 2025" button-label:"Register"
