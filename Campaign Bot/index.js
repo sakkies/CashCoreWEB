@@ -1429,6 +1429,37 @@ async function handleUpload(interaction) {
     return;
   }
 
+  // Require at least one linked account on the selected platform
+  try {
+    const { data: linkedAccounts, error: linkedErr } = await supabase
+      .from('user_accounts')
+      .select('id')
+      .eq('discord_id', userId)
+      .eq('platform', platform)
+      .limit(1);
+
+    if (linkedErr) {
+      console.error('Error checking linked accounts:', linkedErr);
+      await interaction.editReply({
+        content: '❌ Could not verify your linked accounts. Please try again later.'
+      });
+      return;
+    }
+
+    if (!linkedAccounts || linkedAccounts.length === 0) {
+      await interaction.editReply({
+        content: `❌ You must link a ${platform} account before uploading. Use \`/link-account\` to add it.`
+      });
+      return;
+    }
+  } catch (e) {
+    console.error('Unexpected error verifying linked accounts:', e);
+    await interaction.editReply({
+      content: '❌ Unexpected error while verifying your linked accounts.'
+    });
+    return;
+  }
+
   // Get campaign name based on server
   let campaignName = 'General Submission'; // Default fallback
   
