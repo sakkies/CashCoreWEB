@@ -22,6 +22,9 @@ const supabase = createClient(config.supabase.url, supabaseKey);
 // Track processed interactions to prevent duplicates
 const processedInteractions = new Set();
 
+// Track Discord ready state for readiness probe
+let discordReady = false;
+
 // Bot ready event
 client.once('ready', () => {
   console.log(`🤖 CashCore Discord Bot is online!`);
@@ -30,6 +33,23 @@ client.once('ready', () => {
   
   // Set bot status
   client.user.setActivity('Campaign Management', { type: 'WATCHING' });
+  discordReady = true;
+});
+
+// Additional connection lifecycle logging
+client.on('shardDisconnect', (event, shardId) => {
+  console.warn(`Shard ${shardId} disconnected:`, event?.code, event?.reason || 'no reason');
+  discordReady = false;
+});
+
+client.on('shardError', (error, shardId) => {
+  console.error(`Shard ${shardId} error:`, error);
+});
+
+client.on('invalidated', () => {
+  console.error('Discord session invalidated, attempting to relogin...');
+  discordReady = false;
+  loginWithRetry();
 });
 
 // Command handlers
@@ -2103,12 +2123,70 @@ app.get('/', (req, res) => {
   });
 });
 
-app.listen(PORT, () => {
+// Health and readiness endpoints for uptime monitors and load balancers
+app.get('/healthz', (req, res) => {
+  res.json({
+    ok: true,
+    uptime: process.uptime(),
+    discordReady,
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get('/readyz', (req, res) => {
+  if (discordReady) {
+    res.json({ ready: true });
+  } else {
+    res.status(503).json({ ready: false, reason: 'Discord client not ready' });
+  }
+});
+
+const server = app.listen(PORT, () => {
   console.log(`Health check server running on port ${PORT}`);
 });
 
-// Login to Discord
-client.login(config.discord.token).catch(error => {
-  console.error('❌ Failed to login to Discord:', error);
-  process.exit(1);
-});
+// Optional self-keepalive ping to prevent free-tier idling if PUBLIC_URL is set
+if (process.env.PUBLIC_URL) {
+  const keepAliveUrl = `${process.env.PUBLIC_URL.replace(/\/$/, '')}/healthz`;
+  setInterval(async () => {
+    try {
+      await fetch(keepAliveUrl, { method: 'GET' });
+      console.log('Self keepalive ping OK');
+    } catch (e) {
+      console.warn('Self keepalive ping failed:', e?.message || e);
+    }
+  }, 5 * 60 * 1000); // every 5 minutes
+}
+
+// Graceful shutdown
+async function shutdown(signal) {
+  try {
+    console.log(`Received ${signal}, shutting down gracefully...`);
+    server?.close?.();
+    try { await client.destroy(); } catch {}
+  } finally {
+    process.exit(0);
+  }
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+// Login with retry/backoff to handle transient failures
+async function loginWithRetry(maxRetries = Infinity, baseDelayMs = 10000) {
+  let attempt = 0;
+  while (attempt < maxRetries) {
+    try {
+      await client.login(config.discord.token);
+      return;
+    } catch (error) {
+      attempt += 1;
+      const delay = Math.min(baseDelayMs * Math.pow(2, Math.min(attempt, 5)), 5 * 60 * 1000);
+      console.error(`❌ Failed to login to Discord (attempt ${attempt}). Retrying in ${Math.round(delay/1000)}s...`, error?.message || error);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+}
+
+// Initial login
+loginWithRetry();
