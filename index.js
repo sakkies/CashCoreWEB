@@ -1,7 +1,9 @@
-import { Client, GatewayIntentBits, EmbedBuilder, SlashCommandBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
+import { Client, GatewayIntentBits, EmbedBuilder, SlashCommandBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, AttachmentBuilder } from 'discord.js';
 import { createClient } from '@supabase/supabase-js';
 import { config } from './config.js';
 import { spawn } from 'child_process';
+import fetch from 'node-fetch';
+import ViewCountManager from './viewCountManager.js';
 
 // Initialize Discord client
 const client = new Client({
@@ -18,6 +20,9 @@ const supabaseKey = config.supabase.serviceKey && config.supabase.serviceKey.len
   ? config.supabase.serviceKey
   : config.supabase.anonKey;
 const supabase = createClient(config.supabase.url, supabaseKey);
+
+// Initialize View Count Manager
+const viewCountManager = new ViewCountManager();
 
 // Track processed interactions to prevent duplicates
 const processedInteractions = new Set();
@@ -75,8 +80,46 @@ const campaignCommands = {
         .setRequired(true))
     .addStringOption(option =>
       option.setName('platforms')
-        .setDescription('Supported platforms (comma-separated)')
+        .setDescription('Supported platforms')
+        .setRequired(true)
+        .addChoices(
+          { name: 'TikTok', value: 'TikTok' },
+          { name: 'YouTube', value: 'YouTube' },
+          { name: 'Instagram', value: 'Instagram' },
+          { name: 'X (Twitter)', value: 'X' },
+          { name: 'TikTok, YouTube', value: 'TikTok, YouTube' },
+          { name: 'TikTok, Instagram', value: 'TikTok, Instagram' },
+          { name: 'TikTok, X', value: 'TikTok, X' },
+          { name: 'YouTube, Instagram', value: 'YouTube, Instagram' },
+          { name: 'YouTube, X', value: 'YouTube, X' },
+          { name: 'Instagram, X', value: 'Instagram, X' },
+          { name: 'TikTok, YouTube, Instagram', value: 'TikTok, YouTube, Instagram' },
+          { name: 'TikTok, YouTube, X', value: 'TikTok, YouTube, X' },
+          { name: 'TikTok, Instagram, X', value: 'TikTok, Instagram, X' },
+          { name: 'YouTube, Instagram, X', value: 'YouTube, Instagram, X' },
+          { name: 'All Platforms', value: 'TikTok, YouTube, Instagram, X' }
+        ))
+    .addStringOption(option =>
+      option.setName('server_invite')
+        .setDescription('Discord server invite link')
         .setRequired(true))
+    .addNumberOption(option =>
+      option.setName('rpm')
+        .setDescription('Revenue per minute/rate')
+        .setRequired(true))
+    .addStringOption(option =>
+      option.setName('payment_method')
+        .setDescription('Payment method')
+        .setRequired(true)
+        .addChoices(
+          { name: 'Crypto', value: 'Crypto' },
+          { name: 'PayPal', value: 'PayPal' },
+          { name: 'Both (Crypto & PayPal)', value: 'Both' }
+        ))
+    .addStringOption(option =>
+      option.setName('image_url')
+        .setDescription('Campaign image/banner URL (optional)')
+        .setRequired(false))
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   // Delete campaign (Admin only)
@@ -87,7 +130,8 @@ const campaignCommands = {
       option.setName('id')
         .setDescription('Campaign ID to delete')
         .setRequired(true))
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
 };
 
 // User Commands
@@ -189,6 +233,22 @@ const userCommands = {
           { name: 'Approved', value: 'approved' },
           { name: 'Rejected', value: 'rejected' }
         ))
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+  // Export clips (User command - own clips only)
+  exportClips: new SlashCommandBuilder()
+    .setName('export-clips')
+    .setDescription('Export your own clips data to CSV'),
+
+  // Update view counts (User command)
+  updateViewCounts: new SlashCommandBuilder()
+    .setName('update-view-counts')
+    .setDescription('Update view counts for your YouTube, TikTok, and Instagram videos'),
+
+  // Check quota status (Admin only)
+  quotaStatus: new SlashCommandBuilder()
+    .setName('quota-status')
+    .setDescription('Check API quota status and reset if needed (Admin only)')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
 };
 
@@ -202,6 +262,24 @@ const announcementCommands = {
       option.setName('message')
         .setDescription('Announcement message')
         .setRequired(true))
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+  // Manual view count update (Admin only)
+  manualViews: new SlashCommandBuilder()
+    .setName('manual-views')
+    .setDescription('Manually update view count for Instagram/Twitter clips (Admin only)')
+    .addStringOption(option =>
+      option.setName('clip_id')
+        .setDescription('Clip ID to update')
+        .setRequired(true))
+    .addIntegerOption(option =>
+      option.setName('view_count')
+        .setDescription('View count to set')
+        .setRequired(true))
+    .addUserOption(option =>
+      option.setName('user')
+        .setDescription('User who uploaded the clip (optional)')
+        .setRequired(false))
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   // Create custom embed (Admin only)
@@ -331,6 +409,12 @@ client.on('interactionCreate', async interaction => {
       return;
     }
     
+    // Handle quota reset button
+    if (customId === 'reset_quota') {
+      await handleResetQuota(interaction);
+      return;
+    }
+    
     // Handle other button interactions
     await handleButtonClick(interaction);
     return;
@@ -391,6 +475,12 @@ client.on('interactionCreate', async interaction => {
       case 'announce':
         await handleAnnounce(interaction);
         break;
+      case 'manual-views':
+        await handleManualViews(interaction);
+        break;
+      case 'leaderboard':
+        await handleLeaderboard(interaction);
+        break;
       case 'create-embed':
         await handleCreateEmbed(interaction);
         break;
@@ -408,6 +498,15 @@ client.on('interactionCreate', async interaction => {
         break;
       case 'campaign-stats':
         await handleCampaignStats(interaction);
+        break;
+      case 'export-clips':
+        await handleExportClips(interaction);
+        break;
+      case 'update-view-counts':
+        await handleUpdateViewCounts(interaction);
+        break;
+      case 'quota-status':
+        await handleQuotaStatus(interaction);
         break;
       default:
         await interaction.reply({ content: '❌ Unknown command!', ephemeral: true });
@@ -470,18 +569,34 @@ async function handleCreateCampaign(interaction) {
   const details = interaction.options.getString('details');
   const budget = interaction.options.getNumber('budget');
   const platforms = interaction.options.getString('platforms');
+  const serverInvite = interaction.options.getString('server_invite');
+  const rpm = interaction.options.getNumber('rpm');
+  const paymentMethod = interaction.options.getString('payment_method');
+  const imageUrl = interaction.options.getString('image_url');
+  
+  // Get guild information
+  const guildId = interaction.guild?.id || '0';
+  const guildName = interaction.guild?.name || 'Unknown Server';
   
   const { data, error } = await supabase
-    .from('clips')
+    .from('campaign_servers')
     .insert([{
-      title,
-      details,
-      budget,
-      supported_platforms: platforms
+      campaign_name: title,
+      discord_guild_id: guildId,
+      discord_guild_name: guildName,
+      server_invite: serverInvite,
+      rpm: rpm,
+      platform: platforms,
+      payment_method: paymentMethod,
+      image_url: imageUrl,
+      is_active: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
     }])
     .select();
   
   if (error) {
+    console.error('Error creating campaign:', error);
     await interaction.reply({ content: '❌ Failed to create campaign.', ephemeral: true });
     return;
   }
@@ -493,10 +608,19 @@ async function handleCreateCampaign(interaction) {
       { name: 'Title', value: title, inline: true },
       { name: 'Budget', value: `$${budget}`, inline: true },
       { name: 'Platforms', value: platforms, inline: true },
+      { name: 'Server Invite', value: serverInvite, inline: true },
+      { name: 'RPM', value: rpm.toString(), inline: true },
+      { name: 'Payment Method', value: paymentMethod, inline: true },
       { name: 'Details', value: details, inline: false },
       { name: 'Campaign ID', value: data[0].id.toString(), inline: true }
     )
     .setTimestamp();
+  
+  // Add image to embed if provided
+  if (imageUrl) {
+    embed.setImage(imageUrl);
+    embed.addFields({ name: 'Image', value: `[View Image](${imageUrl})`, inline: true });
+  }
   
   await interaction.reply({ embeds: [embed], ephemeral: true });
 }
@@ -866,6 +990,106 @@ async function handleAnnounce(interaction) {
   await interaction.reply({ embeds: [embed], ephemeral: true });
 }
 
+async function handleManualViews(interaction) {
+  try {
+    await interaction.deferReply({ ephemeral: true });
+    
+    const clipId = interaction.options.getString('clip_id');
+    const viewCount = interaction.options.getInteger('view_count');
+    const selectedUser = interaction.options.getUser('user');
+    
+    // Validate inputs
+    if (!clipId || !viewCount || viewCount < 0) {
+      await interaction.editReply({
+        content: '❌ Invalid input. Please provide a valid clip ID and view count.'
+      });
+      return;
+    }
+    
+    // Check if clip exists
+    const { data: clip, error: fetchError } = await supabase
+      .from('clips')
+      .select('*')
+      .eq('id', clipId)
+      .single();
+    
+    if (fetchError || !clip) {
+      await interaction.editReply({
+        content: '❌ Clip not found. Please check the clip ID.'
+      });
+      return;
+    }
+    
+    // Check if platform is Instagram or Twitter/X
+    if (clip.platform !== 'Instagram' && clip.platform !== 'Twitter' && clip.platform !== 'X') {
+      await interaction.editReply({
+        content: '❌ This command is only for Instagram and Twitter/X clips. Use `/update-view-counts` for YouTube and TikTok.'
+      });
+      return;
+    }
+    
+    // If user is specified, verify they match the clip owner
+    if (selectedUser && clip.discord_id !== selectedUser.id) {
+      await interaction.editReply({
+        content: `❌ The selected user (${selectedUser.username}) does not match the clip owner. Please select the correct user or leave this field empty.`
+      });
+      return;
+    }
+    
+    // Update the view count
+    const { error: updateError } = await supabase
+      .from('clips')
+      .update({ 
+        view_count: viewCount,
+        last_view_count_update: new Date().toISOString()
+      })
+      .eq('id', clipId);
+    
+    if (updateError) {
+      console.error('Error updating view count:', updateError);
+      await interaction.editReply({
+        content: '❌ Failed to update view count. Please try again.'
+      });
+      return;
+    }
+    
+    // Get user info for display
+    let userDisplay = 'Unknown User';
+    if (clip.discord_id) {
+      try {
+        const user = await client.users.fetch(clip.discord_id);
+        userDisplay = user.username;
+      } catch (err) {
+        userDisplay = `<@${clip.discord_id}>`;
+      }
+    }
+    
+    // Create success embed
+    const embed = new EmbedBuilder()
+      .setTitle('✅ View Count Updated Manually')
+      .setColor('#00ff00')
+      .setDescription(`Successfully updated view count for clip ${clipId}`)
+      .addFields(
+        { name: '📱 Platform', value: clip.platform, inline: true },
+        { name: '👀 View Count', value: viewCount.toLocaleString(), inline: true },
+        { name: '👤 Clip Owner', value: userDisplay, inline: true },
+        { name: '🔗 Link', value: `[View Clip](${clip.video_link})`, inline: false },
+        { name: '👤 Updated by', value: interaction.user.username, inline: true },
+        { name: '⏰ Updated at', value: new Date().toLocaleString(), inline: true }
+      )
+      .setTimestamp();
+    
+    await interaction.editReply({ embeds: [embed] });
+    console.log(`Manual view count updated by ${interaction.user.tag} (${interaction.user.id}): Clip ${clipId} = ${viewCount} views (${clip.platform})`);
+    
+  } catch (error) {
+    console.error('Error in handleManualViews:', error);
+    await interaction.editReply({
+      content: '❌ An error occurred while updating the view count. Please try again.'
+    });
+  }
+}
+
 async function handleCreateEmbed(interaction) {
   const title = interaction.options.getString('title') || 'Welcome to CashCore!';
   const description = interaction.options.getString('description');
@@ -1164,16 +1388,19 @@ async function handleReviewClips(interaction) {
       return;
     }
 
-    // Create embed with clips
-    const embed = new EmbedBuilder()
+    // Send each clip as a separate message for better readability
+    const clipsToShow = clips.slice(0, 20); // Show up to 20 clips individually
+    
+    // First, send a summary message
+    const summaryEmbed = new EmbedBuilder()
       .setTitle(`🎬 Clip Review Dashboard`)
       .setColor('#0099ff')
-      .setDescription(`Found **${clips.length}** ${statusFilter === 'all' ? 'clips' : statusFilter + ' clips'}`)
+      .setDescription(`Found **${clips.length}** ${statusFilter === 'all' ? 'clips' : statusFilter + ' clips'}\n\nEach clip will be shown individually below:`)
       .setTimestamp();
 
-    // Add clips to embed (limit to 10 to avoid embed limits)
-    const clipsToShow = clips.slice(0, 10);
-    
+    await interaction.editReply({ embeds: [summaryEmbed] });
+
+    // Send each clip individually
     for (const clip of clipsToShow) {
       const statusEmoji = {
         'pending': '⏳',
@@ -1181,53 +1408,67 @@ async function handleReviewClips(interaction) {
         'rejected': '❌'
       }[clip.status] || '❓';
 
+      const statusColor = {
+        'pending': '#ffa500',
+        'approved': '#00ff00',
+        'rejected': '#ff0000'
+      }[clip.status] || '#0099ff';
+
       const createdDate = new Date(clip.created_at).toLocaleDateString();
       
-      embed.addFields({
-        name: `${statusEmoji} Clip #${clip.id}`,
-        value: `**User:** <@${clip.discord_id}>\n**Campaign:** ${clip.campaign_name}\n**Status:** ${clip.status}\n**Date:** ${createdDate}\n**Link:** [View Video](${clip.video_link})`,
-        inline: true
-      });
-    }
+      const clipEmbed = new EmbedBuilder()
+        .setTitle(`${statusEmoji} Clip #${clip.id}`)
+        .setColor(statusColor)
+        .addFields(
+          { name: '👤 User', value: `<@${clip.discord_id}>`, inline: true },
+          { name: '🎯 Campaign', value: clip.campaign_name, inline: true },
+          { name: '📱 Platform', value: clip.platform || 'Unknown', inline: true },
+          { name: '📊 Status', value: clip.status, inline: true },
+          { name: '📅 Date', value: createdDate, inline: true },
+          { name: '🔗 Link', value: `[View Video](${clip.video_link})`, inline: true },
+          { name: '📋 Clip ID', value: `\`${clip.id}\``, inline: false }
+        )
+        .setFooter({ text: `💡 Use /manual-views clip_id:${clip.id} view_count:XXXX to update view counts` })
+        .setTimestamp();
 
-    // Add footer if there are more clips
-    if (clips.length > 10) {
-      embed.setFooter({ text: `Showing 10 of ${clips.length} clips. Use status filter to narrow results.` });
-    }
-
-    // Create buttons for pending clips only
-    const pendingClips = clips.filter(clip => clip.status === 'pending');
-    let components = [];
-    
-    if (pendingClips.length > 0) {
-      // Create buttons for the first 5 pending clips (Discord limit)
-      const clipsForButtons = pendingClips.slice(0, 5);
-      const buttonRows = [];
-      
-      for (const clip of clipsForButtons) {
+      // Add buttons for pending clips only
+      let components = [];
+      if (clip.status === 'pending') {
         const approveButton = new ButtonBuilder()
           .setCustomId(`approve_${clip.id}`)
-          .setLabel(`✅ Approve #${clip.id}`)
+          .setLabel(`✅ Approve`)
           .setStyle(ButtonStyle.Success);
 
         const rejectButton = new ButtonBuilder()
           .setCustomId(`reject_${clip.id}`)
-          .setLabel(`❌ Reject #${clip.id}`)
+          .setLabel(`❌ Reject`)
           .setStyle(ButtonStyle.Danger);
 
         const row = new ActionRowBuilder()
           .addComponents(approveButton, rejectButton);
         
-        buttonRows.push(row);
+        components = [row];
       }
-      
-      components = buttonRows;
+
+      await interaction.followUp({ 
+        embeds: [clipEmbed], 
+        components: components
+      });
+
+      // Small delay to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
 
-    await interaction.editReply({ 
-      embeds: [embed], 
-      components: components 
-    });
+    // Send completion message if there are more clips
+    if (clips.length > 20) {
+      const completionEmbed = new EmbedBuilder()
+        .setTitle(`📋 Review Complete`)
+        .setColor('#00ff00')
+        .setDescription(`Showed first 20 of ${clips.length} clips.\nUse status filter to narrow results.`)
+        .setTimestamp();
+
+      await interaction.followUp({ embeds: [completionEmbed] });
+    }
 
   } catch (error) {
     console.error('Error in handleReviewClips:', error);
@@ -1506,7 +1747,8 @@ async function handleUpload(interaction) {
       video_link: clipLink,
       campaign_name: campaignName,
       platform: platform,
-      status: 'pending'
+      status: 'pending',
+      discord_guild_id: guildId
     }])
     .select();
 
@@ -1985,18 +2227,21 @@ async function handleCampaignStats(interaction) {
         targetCampaign = campaignServer.campaign_name;
       }
     } catch (error) {
-      console.log(`No specific campaign found for server ${guildId}, showing all campaigns`);
+      console.log(`No specific campaign found for server ${guildId}, showing clips from this server only`);
     }
     
-    // Build query based on campaign filter
+    // Build query based on server and campaign filter
     let query = supabase
       .from('clips')
-      .select('status, campaign_name, platform, created_at')
+      .select('status, campaign_name, platform, created_at, discord_id, discord_guild_id')
+      .eq('discord_guild_id', guildId) // Always filter by server first
       .order('created_at', { ascending: false });
 
     if (targetCampaign) {
+      // If we found a specific campaign for this server, also filter by campaign name
       query = query.eq('campaign_name', targetCampaign);
     }
+    // If no specific campaign found, show all clips from this server
 
     const { data: clips, error } = await query;
 
@@ -2028,7 +2273,7 @@ async function handleCampaignStats(interaction) {
 
     // Get campaign breakdown (if no specific campaign filter)
     const campaignStats = {};
-    if (!campaignFilter) {
+    if (!targetCampaign) {
       clips.forEach(clip => {
         const campaign = clip.campaign_name || 'Unknown';
         campaignStats[campaign] = (campaignStats[campaign] || 0) + 1;
@@ -2042,9 +2287,9 @@ async function handleCampaignStats(interaction) {
       .setTimestamp();
 
     if (targetCampaign) {
-      embed.setDescription(`Statistics for **${targetCampaign}** campaign`);
+      embed.setDescription(`Statistics for **${targetCampaign}** campaign in ${interaction.guild?.name || 'this server'}`);
     } else {
-      embed.setDescription('Overall campaign statistics');
+      embed.setDescription(`Statistics for ${interaction.guild?.name || 'this server'} (all campaigns)`);
     }
 
     // Add main stats
@@ -2098,6 +2343,308 @@ async function handleCampaignStats(interaction) {
         ephemeral: true
       });
     }
+  }
+}
+
+// Handle export clips (User command - own clips only)
+async function handleExportClips(interaction) {
+  try {
+    await interaction.deferReply({ ephemeral: true });
+
+    const userId = interaction.user.id;
+
+    // Export only the user's own clips
+    const { data: clips, error } = await supabase
+      .from('clips')
+      .select('*')
+      .eq('discord_id', userId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching clips for export:', error);
+      await interaction.editReply({
+        content: '❌ **Error fetching clips!**\n\nThere was an error retrieving the clips from the database.'
+      });
+      return;
+    }
+
+    if (!clips || clips.length === 0) {
+      await interaction.editReply({
+        content: '📭 **No clips found!**\n\nYou haven\'t uploaded any clips yet.'
+      });
+      return;
+    }
+
+    // Create CSV content (date, link, and view count)
+    const csvHeaders = 'Date,Clip Link,View Count\n';
+    const csvRows = clips.map(clip => {
+      return [
+        new Date(clip.created_at).toLocaleDateString(),
+        clip.video_link || '',
+        clip.view_count || 'N/A'
+      ].join(',');
+    });
+
+    const csvContent = csvHeaders + csvRows.join('\n');
+
+    // Create buffer and attachment
+    const buffer = Buffer.from(csvContent, 'utf8');
+    const attachment = {
+      name: `my_clips_export_${new Date().toISOString().split('T')[0]}.csv`,
+      attachment: buffer
+    };
+
+    const embed = new EmbedBuilder()
+      .setTitle('📊 Your Clips Export Complete')
+      .setColor('#00ff00')
+      .setDescription(`Successfully exported **${clips.length}** of your clips`)
+      .addFields(
+        { name: 'Export Type', value: 'Your clips only', inline: true },
+        { name: 'Export Date', value: new Date().toLocaleDateString(), inline: true },
+        { name: 'File Name', value: `my_clips_export_${new Date().toISOString().split('T')[0]}.csv`, inline: true }
+      )
+      .setTimestamp();
+
+    await interaction.editReply({ 
+      embeds: [embed], 
+      files: [attachment] 
+    });
+
+    console.log(`User clips exported by ${interaction.user.tag} (${interaction.user.id}): ${clips.length} clips`);
+
+  } catch (error) {
+    console.error('Error in handleExportClips:', error);
+    await interaction.editReply({
+      content: '❌ An error occurred while exporting clips. Please try again.'
+    });
+  }
+}
+
+// Handle update view counts (User command)
+async function handleUpdateViewCounts(interaction) {
+  try {
+    await interaction.deferReply({ ephemeral: true });
+
+    const userId = interaction.user.id;
+
+    // Get user's clips from all platforms
+    const { data: clips, error } = await supabase
+      .from('clips')
+      .select('*')
+      .eq('discord_id', userId)
+      .in('platform', ['YouTube', 'TikTok', 'Instagram'])
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching clips:', error);
+      await interaction.editReply({
+        content: '❌ **Error fetching clips!**\n\nThere was an error retrieving your clips.'
+      });
+      return;
+    }
+
+    if (!clips || clips.length === 0) {
+      await interaction.editReply({
+        content: '📭 **No clips found!**\n\nYou haven\'t uploaded any YouTube, TikTok, or Instagram videos yet.'
+      });
+      return;
+    }
+
+    // Show quota status before processing
+    const quotaStatus = viewCountManager.getQuotaStatus();
+    const quotaEmbed = new EmbedBuilder()
+      .setTitle('📊 View Count Update Starting')
+      .setColor('#0099ff')
+      .setDescription(`Processing **${clips.length}** clips from all platforms`)
+      .addFields(
+        { name: 'YouTube API Quota', value: `${quotaStatus.youtube.used}/${quotaStatus.youtube.limit} (${quotaStatus.youtube.percentage}%)`, inline: true },
+        { name: 'Platforms', value: 'YouTube, TikTok, Instagram', inline: true }
+      )
+      .setTimestamp();
+
+    await interaction.editReply({ embeds: [quotaEmbed] });
+
+    // Process clips in batches
+    const batchSize = 10;
+    const batches = [];
+    for (let i = 0; i < clips.length; i += batchSize) {
+      batches.push(clips.slice(i, i + batchSize));
+    }
+
+    let totalResults = {
+      youtube: { updated: 0, errors: 0 },
+      tiktok: { updated: 0, errors: 0 },
+      instagram: { updated: 0, errors: 0 }
+    };
+
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i];
+      console.log(`Processing batch ${i + 1}/${batches.length} (${batch.length} clips)`);
+      
+      const batchResults = await viewCountManager.updateViewCountsBatch(batch);
+      
+      // Accumulate results
+      Object.keys(totalResults).forEach(platform => {
+        totalResults[platform].updated += batchResults[platform].updated;
+        totalResults[platform].errors += batchResults[platform].errors;
+      });
+
+      // Update progress
+      if (batches.length > 1) {
+        const progressEmbed = new EmbedBuilder()
+          .setTitle('📊 View Count Update Progress')
+          .setColor('#ffa500')
+          .setDescription(`Processing batch ${i + 1}/${batches.length}`)
+          .addFields(
+            { name: 'YouTube', value: `✅ ${totalResults.youtube.updated} updated, ❌ ${totalResults.youtube.errors} errors`, inline: true },
+            { name: 'TikTok', value: `✅ ${totalResults.tiktok.updated} updated, ❌ ${totalResults.tiktok.errors} errors`, inline: true },
+            { name: 'Instagram', value: `✅ ${totalResults.instagram.updated} updated, ❌ ${totalResults.instagram.errors} errors`, inline: true }
+          )
+          .setTimestamp();
+
+        await interaction.editReply({ embeds: [progressEmbed] });
+      }
+
+      // Delay between batches
+      if (i < batches.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+    }
+
+    // Final results
+    const finalEmbed = new EmbedBuilder()
+      .setTitle('📊 View Counts Updated Successfully!')
+      .setColor('#00ff00')
+      .setDescription(`Completed processing **${clips.length}** clips from all platforms`)
+      .addFields(
+        { name: '📺 YouTube', value: `✅ ${totalResults.youtube.updated} updated\n❌ ${totalResults.youtube.errors} errors`, inline: true },
+        { name: '🎵 TikTok', value: `✅ ${totalResults.tiktok.updated} updated\n❌ ${totalResults.tiktok.errors} errors`, inline: true },
+        { name: '📸 Instagram', value: `✅ ${totalResults.instagram.updated} updated\n❌ ${totalResults.instagram.errors} errors`, inline: true },
+        { name: '📈 Total Success', value: `${totalResults.youtube.updated + totalResults.tiktok.updated + totalResults.instagram.updated}/${clips.length} clips`, inline: false }
+      )
+      .setTimestamp();
+
+    await interaction.editReply({ embeds: [finalEmbed] });
+    console.log(`View counts updated by ${interaction.user.tag} (${interaction.user.id}): ${totalResults.youtube.updated + totalResults.tiktok.updated + totalResults.instagram.updated}/${clips.length} successful`);
+
+  } catch (error) {
+    console.error('Error in handleUpdateViewCounts:', error);
+    await interaction.editReply({
+      content: '❌ An error occurred while updating view counts. Please try again.'
+    });
+  }
+}
+
+// Handle quota status (Admin only)
+async function handleQuotaStatus(interaction) {
+  try {
+    // Check if user has administrator permissions
+    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({
+        content: '❌ **Access Denied!**\n\nThis command is only available to administrators.',
+        ephemeral: true
+      });
+      return;
+    }
+
+    const quotaStatus = viewCountManager.getQuotaStatus();
+    
+    const embed = new EmbedBuilder()
+      .setTitle('📊 API Quota Status')
+      .setColor('#0099ff')
+      .setDescription('Current API quota usage across all platforms')
+      .addFields(
+        { 
+          name: '📺 YouTube API', 
+          value: `**Used:** ${quotaStatus.youtube.used}/${quotaStatus.youtube.limit}\n**Remaining:** ${quotaStatus.youtube.remaining}\n**Usage:** ${quotaStatus.youtube.percentage}%`, 
+          inline: true 
+        },
+        { 
+          name: '🎵 TikTok Scraper', 
+          value: `**Rate Limit:** ${viewCountManager.tiktokRateLimit} requests/min\n**Status:** Active\n**Method:** Web Scraping`, 
+          inline: true 
+        },
+        { 
+          name: '📸 Instagram Scraper', 
+          value: `**Rate Limit:** ${viewCountManager.instagramRateLimit} requests/min\n**Status:** Active\n**Method:** Web Scraping`, 
+          inline: true 
+        }
+      )
+      .setTimestamp();
+
+    // Add warning if quota is high
+    if (quotaStatus.youtube.percentage > 80) {
+      embed.setColor('#ff6b6b');
+      embed.addFields({
+        name: '⚠️ Warning',
+        value: 'YouTube API quota is running low! Consider resetting or upgrading your quota.',
+        inline: false
+      });
+    }
+
+    // Add reset button if quota is high
+    const components = [];
+    if (quotaStatus.youtube.percentage > 50) {
+      const resetButton = new ButtonBuilder()
+        .setCustomId('reset_quota')
+        .setLabel('🔄 Reset YouTube Quota')
+        .setStyle(ButtonStyle.Danger);
+      
+      const row = new ActionRowBuilder().addComponents(resetButton);
+      components.push(row);
+    }
+
+    await interaction.reply({ 
+      embeds: [embed], 
+      components: components,
+      ephemeral: true 
+    });
+
+  } catch (error) {
+    console.error('Error in handleQuotaStatus:', error);
+    await interaction.reply({
+      content: '❌ An error occurred while checking quota status. Please try again.',
+      ephemeral: true
+    });
+  }
+}
+
+// Handle reset quota (Admin only)
+async function handleResetQuota(interaction) {
+  try {
+    // Check if user has administrator permissions
+    if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({
+        content: '❌ **Access Denied!**\n\nThis action is only available to administrators.',
+        ephemeral: true
+      });
+      return;
+    }
+
+    await interaction.deferReply({ ephemeral: true });
+
+    // Reset the quota
+    viewCountManager.resetQuota();
+    
+    const embed = new EmbedBuilder()
+      .setTitle('🔄 YouTube API Quota Reset')
+      .setColor('#00ff00')
+      .setDescription('YouTube API quota has been successfully reset!')
+      .addFields(
+        { name: 'Reset By', value: `<@${interaction.user.id}>`, inline: true },
+        { name: 'Reset Time', value: new Date().toLocaleString(), inline: true },
+        { name: 'New Quota', value: '0/10,000 (0%)', inline: true }
+      )
+      .setTimestamp();
+
+    await interaction.editReply({ embeds: [embed] });
+    console.log(`YouTube API quota reset by ${interaction.user.tag} (${interaction.user.id})`);
+
+  } catch (error) {
+    console.error('Error in handleResetQuota:', error);
+    await interaction.editReply({
+      content: '❌ An error occurred while resetting the quota. Please try again.'
+    });
   }
 }
 
@@ -2185,6 +2732,77 @@ async function loginWithRetry(maxRetries = Infinity, baseDelayMs = 10000) {
       console.error(`❌ Failed to login to Discord (attempt ${attempt}). Retrying in ${Math.round(delay/1000)}s...`, error?.message || error);
       await new Promise(r => setTimeout(r, delay));
     }
+  }
+}
+
+async function handleLeaderboard(interaction) {
+  try {
+    await interaction.deferReply({ ephemeral: true });
+    
+    // Get all clips with view counts and user info
+    const { data: clips, error } = await supabase
+      .from('clips')
+      .select('id, view_count, platform, video_link, created_at, discord_id')
+      .not('view_count', 'is', null)
+      .not('discord_id', 'is', null);
+    
+    if (error) {
+      console.error('Error fetching view count leaderboard:', error);
+      await interaction.editReply({ content: '❌ Error fetching leaderboard data!' });
+      return;
+    }
+    
+    // Calculate total view counts per user
+    const userStats = {};
+    clips.forEach(clip => {
+      if (!userStats[clip.discord_id]) {
+        userStats[clip.discord_id] = {
+          totalViews: 0,
+          videoCount: 0,
+          platforms: new Set()
+        };
+      }
+      userStats[clip.discord_id].totalViews += clip.view_count || 0;
+      userStats[clip.discord_id].videoCount += 1;
+      userStats[clip.discord_id].platforms.add(clip.platform);
+    });
+    
+    // Sort users by total view count
+    const sortedUsers = Object.entries(userStats)
+      .sort(([,a], [,b]) => b.totalViews - a.totalViews);
+    
+    const totalUploaders = sortedUsers.length;
+    const topUsers = sortedUsers.slice(0, 10);
+    
+    const embed = new EmbedBuilder()
+      .setTitle('🏆 Top Users by Total View Count')
+      .setColor(0x00ff00)
+      .setTimestamp();
+    
+    if (topUsers.length > 0) {
+      let description = '';
+      for (let i = 0; i < topUsers.length; i++) {
+        const [discordId, stats] = topUsers[i];
+        const position = i + 1;
+        const rank = `${position}/${totalUploaders}`;
+        const medal = position === 1 ? '🥇' : position === 2 ? '🥈' : position === 3 ? '🥉' : '';
+        const totalViews = stats.totalViews.toLocaleString();
+        const platforms = Array.from(stats.platforms).join(', ');
+        
+        description += `${medal} **${rank}** <@${discordId}>\n`;
+        description += `   👀 **${totalViews}** total views\n`;
+        description += `   📹 ${stats.videoCount} videos (${platforms})\n\n`;
+      }
+      embed.setDescription(description);
+    } else {
+      embed.setDescription('No users with view counts found.');
+    }
+    
+    await interaction.editReply({ embeds: [embed] });
+    
+  } catch (error) {
+    console.error('Error in handleLeaderboard:', error);
+    await interaction.editReply({ content: '❌ Error generating leaderboard!' });
   }
 }
 

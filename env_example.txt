@@ -8,11 +8,17 @@ SUPABASE_URL=https://whcwkuufssjoiktkpeen.supabase.co
 SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndoY3drdXVmc3Nqb2lrdGtwZWVuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTcwNzU1NTgsImV4cCI6MjA3MjY1MTU1OH0.EqiEpEzlxPjajMuHF1RhZgXjJX9E9Bp97XPY8cIjtI8
 SUPABASE_SERVICE_KEY=your_supabase_service_key_here
 
-# YouTube API Configuration (Optional)
+# YouTube API Configuration (Required for YouTube view counts)
 YOUTUBE_API_KEY=AIzaSyCGCarM_ZaZXsWoIU0QLcpljZehLFoV_Es
 
-# Rate limiting settings (Optional)
+# Rate limiting settings (Optional - defaults provided)
 VERIFICATION_DELAY_SECONDS=1
 MAX_CONCURRENT_REQUESTS=5
 BATCH_SIZE=10
 VERIFICATION_INTERVAL_MINUTES=60
+
+# View Count Scraper Settings (Optional)
+YOUTUBE_RATE_LIMIT=100
+TIKTOK_RATE_LIMIT=30
+INSTAGRAM_RATE_LIMIT=20
+YOUTUBE_QUOTA_LIMIT=10000

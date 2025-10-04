@@ -14,7 +14,8 @@
     "@supabase/supabase-js": "^2.50.3",
     "discord.js": "^14.14.1",
     "dotenv": "^16.3.1",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "node-fetch": "^3.3.2"
   },
   "keywords": [
     "discord",
